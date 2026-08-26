@@ -89,11 +89,11 @@ const PROC_SKY_ENV=(()=>{
 })();
 /* ===== P1-B: 世界空间盒体 GI 场(学 poolrooms:只缩放间接光三项,直接光不动) ===== */
 const GI_BOXES=[
-  {c:[-14.3,3.0,-28.7],h:[2.8,4.5,12.5],i:.18},   // 后巷(暗)
-  {c:[0,3.0,-8],h:[11,4.5,37],i:.58},             // 主街
-  {c:[40,3.0,21],h:[36,4.5,11],i:.88},            // 港湾支街(开阔亮)
-  {c:[82,4.0,21],h:[32,5,28],i:.76},              // 远岸码头
-  {c:[-25,5,-92],h:[18,9,30],i:.40}               // 对岸剪影区
+  {c:[-14.3,3.0,-28.7],h:[2.8,4.5,12.5],i:.12},   // 后巷(更暗)
+  {c:[0,3.0,-8],h:[11,4.5,37],i:.62},             // 主街
+  {c:[40,3.0,21],h:[36,4.5,11],i:1.05},           // 港湾支街(更亮)
+  {c:[82,4.0,21],h:[32,5,28],i:.82},              // 远岸码头
+  {c:[-25,5,-92],h:[18,9,30],i:.45}               // 对岸剪影区
 ];
 const GI_UNI={
   uGiBase:{value:.80},
@@ -132,8 +132,8 @@ const REFL_WATER_MAT=(()=>{
     uSunDir:{value:new THREE.Vector3(-38,58,22).normalize()},
     uSunColor:{value:new THREE.Color(0xffe0ae).multiplyScalar(1.35)},
     uSkyHi:{value:new THREE.Color(0x9fc4c9)},uSkyLo:{value:new THREE.Color(0xa9c3ca)},
-    uDeep:{value:new THREE.Color(0x244f5c)},uShallow:{value:new THREE.Color(0x37767e)},
-    uFogColor:{value:new THREE.Color(0xa9c3ca)},uFogDensity:{value:.0024}
+    uDeep:{value:new THREE.Color(0x143a48)},uShallow:{value:new THREE.Color(0x2d6878)},  // 更深的海蓝
+    uFogColor:{value:new THREE.Color(0xa9c3ca)},uFogDensity:{value:.0022}
   };
   const mat=new THREE.ShaderMaterial({
     uniforms:u,
@@ -251,15 +251,18 @@ function initQualityPipeline(){
     composer=new EffectComposer(renderer);
     composer.addPass(new RenderPass(scene,camera));
     ssaoPass=new SSAOPass(scene,camera,innerWidth,innerHeight);
-    ssaoPass.kernelRadius=.85;ssaoPass.minDistance=.004;ssaoPass.maxDistance=.10;
+    ssaoPass.kernelRadius=1.2;ssaoPass.minDistance=.003;ssaoPass.maxDistance=.12;
     composer.addPass(ssaoPass);
-    bloomPass=new UnrealBloomPass(new THREE.Vector2(innerWidth,innerHeight),.35,.55,.92);
+    bloomPass=new UnrealBloomPass(new THREE.Vector2(innerWidth,innerHeight),.55,.7,.95);
+    bloomPass.threshold=.85;  // 让窗光/招牌更明显发光
     composer.addPass(bloomPass);
     smaaPass=new SMAAPass(innerWidth*Math.min(devicePixelRatio,1.6),innerHeight*Math.min(devicePixelRatio,1.6));
     composer.addPass(smaaPass);
     composer.addPass(new OutputPass());
     gradePass=new ShaderPass(GRADE_SHADER);
     composer.addPass(gradePass);
+    // 提升 exposure,让整体更明亮
+    if(renderer.toneMappingExposure !== undefined) renderer.toneMappingExposure=1.05;
   }catch(err){console.warn('quality pipeline fallback to direct renderer',err);composer=null;ssaoPass=null;smaaPass=null;bloomPass=null;gradePass=null}
 }
 const texLoader=new THREE.TextureLoader();const colliders=[];const keys={};
@@ -611,7 +614,7 @@ function c2000CreateReworkFacade(parent,cx,cz,w,levels,side,seed){
   const B=new THREE.Group();B.name='C2000_V2_StreetFacade';parent.add(B);const h=levels*3.35+1.4,dir=side==='north'?-1:1;
   const brick=c2000EmbeddedPBR('brick',2.05,levels*.68);const wall=new THREE.MeshStandardMaterial({map:brick.map,normalMap:brick.normalMap,normalScale:new THREE.Vector2(.58,.58),color:0xc8beb0,emissive:0x160f09,emissiveIntensity:.10,roughness:.84,metalness:.01});
   const charcoal=new THREE.MeshStandardMaterial({color:0x3a4648,roughness:.39,metalness:.54});const stone=new THREE.MeshStandardMaterial({color:0xc2b9a9,roughness:.64,metalness:.05});
-  const glass=new THREE.MeshStandardMaterial({color:0x547987,roughness:.24,metalness:.06,envMapIntensity:2.25,emissive:0x10262c,emissiveIntensity:.22,transparent:true,opacity:.78});const inside=new THREE.MeshStandardMaterial({color:0x8c5527,roughness:.50,emissive:0x7b3c12,emissiveIntensity:.68});
+  const glass=new THREE.MeshStandardMaterial({color:0x547987,roughness:.24,metalness:.06,envMapIntensity:2.25,emissive:0xffaa55,emissiveIntensity:.55,transparent:true,opacity:.78});const inside=new THREE.MeshStandardMaterial({color:0x8c5527,roughness:.50,emissive:0xffbb66,emissiveIntensity:1.1});
   c2000Box(B,w,h,1.14,wall,cx,h*.5,cz,'C2000_V2_WallMass');
   const face=cz+dir*.64;
   c2000Box(B,w+.22,.42,1.54,charcoal,cx,h+.22,cz,'C2000_V2_Parapet');
@@ -638,8 +641,8 @@ function buildC2000ReworkDistrict(){
   // V2 owns the complete north frontage. Keep the south-side context, but remove the two coincident L1 facades rather than stacking incompatible materials at the same curb.
   for(const i of [2,3]){if(C2000.facades[i]){C2000.facades[i].visible=false;C2000.facades[i].name='C2000_V2_ReplacedNorthFacade';}}
   // Sky/light reset is synchronized with the sun direction that drives the shader and the disc.
-  scene.background=new THREE.Color(0x9bc1ce);scene.fog=new THREE.FogExp2(0xb7cfd3,.0032);renderer.toneMappingExposure=1.08;
-  const sun=scene.children.find(o=>o.name==='C2000_KeySun');if(sun){sun.position.set(28,45,130);sun.color.set(0xffce91);sun.intensity=3.78;sun.shadow.bias=-.00016;sun.shadow.normalBias=.028;sun.shadow.camera.left=-82;sun.shadow.camera.right=82;sun.shadow.camera.top=90;sun.shadow.camera.bottom=-76;}
+  scene.background=new THREE.Color(0x9bc1ce);scene.fog=new THREE.FogExp2(0xb7cfd3,.0028);renderer.toneMappingExposure=1.15;
+  const sun=scene.children.find(o=>o.name==='C2000_KeySun');if(sun){sun.position.set(28,45,130);sun.color.set(0xffd0a0);sun.intensity=4.2;sun.shadow.bias=-.00016;sun.shadow.normalBias=.028;sun.shadow.camera.left=-82;sun.shadow.camera.right=82;sun.shadow.camera.top=90;sun.shadow.camera.bottom=-76;}
   const hemi=scene.children.find(o=>o.isHemisphereLight);if(hemi){hemi.color.set(0xd7edf2);hemi.groundColor.set(0x687063);hemi.intensity=1.54;}
   if(C2000.sky){C2000.sky.material.uniforms.uSun.value.copy(new THREE.Vector3(28,45,130).normalize());}
   const disc=c2000SunSprite();root.add(disc);C2000.sunDisc=disc;
