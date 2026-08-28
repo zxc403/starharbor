@@ -30,18 +30,24 @@ const camera=new THREE.PerspectiveCamera(63,innerWidth/innerHeight,.1,240),clock
 const gltf=new GLTFLoader();gltf.setMeshoptDecoder(MeshoptDecoder);
 let composer=null,ssaoPass=null,smaaPass=null,bloomPass=null,gradePass=null;
 /* FINAL 电影调色:在 OutputPass(ACES+sRGB) 之后做 lift/gain 冷暖分离、饱和度、对比度、暗角与颗粒 */
-const GRADE_SHADER={uniforms:{tDiffuse:{value:null},uVig:{value:.24},uGrain:{value:.009},uSat:{value:1.055},uCon:{value:1.035},uLift:{value:new THREE.Vector3(.004,.009,.012)},uGain:{value:new THREE.Vector3(1.015,1.002,.968)},uTime:{value:0},uAspect:{value:innerWidth/Math.max(1,innerHeight)}},
+const GRADE_SHADER={uniforms:{tDiffuse:{value:null},uVig:{value:.32},uGrain:{value:.014},uSat:{value:1.08},uCon:{value:1.06},uLift:{value:new THREE.Vector3(.006,.012,.018)},uGain:{value:new THREE.Vector3(1.025,1.005,.962)},uShadows:{value:new THREE.Vector3(.96,.97,1.02)},uHighlights:{value:new THREE.Vector3(1.04,1.02,.95)},uTime:{value:0},uAspect:{value:innerWidth/Math.max(1,innerHeight)}},
 vertexShader:'varying vec2 vUv;void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',
-fragmentShader:['uniform sampler2D tDiffuse;uniform float uVig,uGrain,uSat,uCon,uTime,uAspect;uniform vec3 uLift,uGain;varying vec2 vUv;',
+fragmentShader:['uniform sampler2D tDiffuse;uniform float uVig,uGrain,uSat,uCon,uTime,uAspect;uniform vec3 uLift,uGain,uShadows,uHighlights;varying vec2 vUv;',
 'float ghash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}',
 'void main(){',
 '  vec3 c=texture2D(tDiffuse,vUv).rgb;',
+'  // 暖阴影/冷高光 split-toning',
+'  float lum=dot(c,vec3(.2126,.7152,.0722));',
+'  vec3 shadowTint=mix(vec3(1.0),uShadows,1.0-smoothstep(0.0,0.5,lum));',
+'  vec3 highTint=mix(vec3(1.0),uHighlights,smoothstep(0.5,1.0,lum));',
+'  c*=shadowTint*highTint;',
 '  c=c*uGain+uLift;',
-'  float l=dot(c,vec3(.2126,.7152,.0722));',
-'  c=mix(vec3(l),c,uSat);',
+'  c=mix(vec3(lum),c,uSat);',
 '  c=(c-.5)*uCon+.5;',
+'  // 暗角',
 '  vec2 d=vUv-.5;d.x*=uAspect;',
-'  c*=1.-uVig*smoothstep(.16,.86,dot(d,d)*2.4);',
+'  c*=1.-uVig*smoothstep(.10,.92,dot(d,d)*2.4);',
+'  // 颗粒 (time-based)',
 '  c+=(ghash(vUv*vec2(1613.,919.)+fract(uTime)*7.13)-.5)*uGrain;',
 '  gl_FragColor=vec4(clamp(c,0.,1.),1.);}'].join('\n')};
 /* ===== P1-A: 真实 HDR 加载(优先) + 程序化 fallback ===== */
@@ -163,22 +169,27 @@ const REFL_WATER_MAT=(()=>{
       ' vec3 N=normalize(vec3((H-hx)*2.2,1.,(H-hz)*2.2));',
       ' float wf=1.-.55*smoothstep(60.,170.,length(uCam-vW));N=normalize(vec3(N.x*wf,N.y,N.z*wf));',
       ' vec3 V=normalize(uCam-vW);',
-      ' float fres=.02+.98*pow(1.-max(dot(N,V),0.),5.);',
+      ' float fres=.04+1.02*pow(1.-max(dot(N,V),0.),4.5);',
       ' vec3 R=reflect(-V,N);',
       ' vec4 pr=uTexMatrix*vec4(vW,1.);vec2 ruv=pr.xy/pr.w;',
-      ' ruv+=N.xz*.03;',
-      ' vec3 refl=mix(uSkyHi,uSkyLo,clamp(R.y*1.6,0.,1.))*1.04;',
+      ' ruv+=N.xz*.045;',  // 反射偏移加强, 让水面更"碎"
+      ' vec3 refl=mix(uSkyHi,uSkyLo,clamp(R.y*1.6,0.,1.))*1.06;',
       ' if(uReflOn>.5){',
       '  vec2 suv=clamp(ruv,vec2(.002),vec2(.998));',
       '  vec3 rt=texture2D(uRefl,suv).rgb;',
       '  float edge=smoothstep(0.,.05,ruv.x)*smoothstep(1.,.95,ruv.x)*smoothstep(0.,.05,ruv.y)*smoothstep(1.,.95,ruv.y);',
-      '  refl=mix(refl,rt,edge);',
+      '  refl=mix(refl,rt,edge*0.92);',
       ' }',
       ' float sunR=max(dot(R,uSunDir),0.);',
       ' float spec=min(pow(sunR,260.)*1.1+pow(sunR,900.)*1.8,2.2);',
       ' spec*=.75+.5*vnoise(p*6.+vec2(t*.28,-t*.19));',
       ' float depth=smoothstep(6.,24.,vW.x);',
       ' vec3 body=mix(uShallow,uDeep,depth)*(.72+.28*max(dot(N,uSunDir),0.));',
+      ' // 白浪: 浪尖出现泡沫',
+      ' float foam=0.0;',
+      ' foam+=step(.72,vnoise(p*3.+vec2(t*.4,-t*.3)))*.4;',
+      ' foam+=step(.78,vnoise(p*1.5+vec2(-t*.25,t*.18)))*.5;',
+      ' body=mix(body,vec3(0.92,0.95,0.98),clamp(foam*0.7,0.0,0.85));',
       ' vec3 col=mix(body,refl,fres)+uSunColor*spec;',
       ' float f=1.-exp(-pow(vViewZ*uFogDensity,2.));',
       ' col=mix(col,uFogColor,f);',
@@ -774,7 +785,29 @@ joyZone.addEventListener('pointerdown',e=>{e.preventDefault();touch.joyId=e.poin
 function endSprint(){touch.sprint=false;sprintBtn.classList.remove('on')}
 sprintBtn.addEventListener('pointerdown',e=>{e.preventDefault();touch.sprint=true;sprintBtn.classList.add('on');sprintBtn.setPointerCapture?.(e.pointerId)});sprintBtn.addEventListener('pointerup',endSprint);sprintBtn.addEventListener('pointercancel',endSprint);jumpBtn.addEventListener('pointerdown',e=>{e.preventDefault();touch.jump=true;jumpBtn.classList.add('on');setTimeout(()=>jumpBtn.classList.remove('on'),120)});
 canvas.addEventListener('click',()=>{if(!isCoarse&&!locked)canvas.requestPointerLock?.()});document.addEventListener('pointerlockchange',()=>locked=document.pointerLockElement===canvas);document.addEventListener('mousemove',e=>{if(locked){yaw-=e.movementX*.0024;pitch=Math.max(-.68,Math.min(.48,pitch-e.movementY*.002))}});canvas.addEventListener('pointerdown',e=>{if(e.pointerType==='touch'&&e.clientX>=innerWidth*.44){touch.lookId=e.pointerId;touch.lastX=e.clientX;touch.lastY=e.clientY;canvas.setPointerCapture?.(e.pointerId);e.preventDefault()}});canvas.addEventListener('pointermove',e=>{if(e.pointerId===touch.lookId){yaw-=(e.clientX-touch.lastX)*.006;pitch=Math.max(-.68,Math.min(.48,pitch-(e.clientY-touch.lastY)*.0045));touch.lastX=e.clientX;touch.lastY=e.clientY;e.preventDefault()}});canvas.addEventListener('pointerup',e=>{if(e.pointerId===touch.lookId)touch.lookId=null});canvas.addEventListener('pointercancel',e=>{if(e.pointerId===touch.lookId)touch.lookId=null});addEventListener('keydown',e=>{keys[e.code]=true;if(e.code==='Space')e.preventDefault()});addEventListener('keyup',e=>keys[e.code]=false);addEventListener('blur',()=>{resetJoy();endSprint();touch.lookId=null});document.addEventListener('visibilitychange',()=>{if(document.hidden){resetJoy();endSprint();touch.lookId=null}});const params=new URLSearchParams(location.search);if(params.has('district')){pl.x=38;pl.z=23.0;yaw=0.0;pitch=-.08;}document.getElementById('start').onclick=()=>document.getElementById('intro').style.display='none';if(params.has('autoplay'))document.getElementById('intro').style.display='none';
-let acc=0,frames=0;function loop(){const dt=Math.min(clock.getDelta(),.05);WATER_MAT.uniforms.uTime.value=clock.elapsedTime;REFL_WATER_MAT.uniforms.uTime.value=clock.elapsedTime;if(WATER_REFL.on&&WATER_REFL.rt)WATER_REFL.update(camera);if(gradePass)gradePass.uniforms.uTime.value=clock.elapsedTime;if(HARBOR_LIFE)HARBOR_LIFE.update(clock.elapsedTime);if(C2000.root)C2000.update?.(clock.elapsedTime);const f=new THREE.Vector3(Math.sin(yaw),0,Math.cos(yaw)),r=new THREE.Vector3(f.z,0,-f.x);let dx=0,dz=0,keyMove=false;if(keys.KeyW){dx+=f.x;dz+=f.z;keyMove=true}if(keys.KeyS){dx-=f.x;dz-=f.z;keyMove=true}if(keys.KeyA){dx-=r.x;dz+=r.z;keyMove=true}if(keys.KeyD){dx+=r.x;dz-=r.z;keyMove=true}if(touch.mx||touch.my){dx+=-r.x*touch.mx-f.x*touch.my;dz+=-r.z*touch.mx-f.z*touch.my}const l=Math.hypot(dx,dz),analog=keyMove?1:Math.min(1,Math.hypot(touch.mx,touch.my)),spd=(keys.ShiftLeft||touch.sprint)?8.1:4.75;if(l&&analog){dx=dx/l*spd*dt*analog;dz=dz/l*spd*dt*analog;const nx=Math.max(corridor.minX,Math.min(corridor.maxX,pl.x+dx)),nz=Math.max(corridor.minZ,Math.min(corridor.maxZ,pl.z+dz));if(!collision(nx,nz)&&isV6Playable(nx,nz)){pl.x=nx;pl.z=nz}}const wantsJump=keys.Space||touch.jump;touch.jump=false;if(wantsJump&&ground){vy=6.2;ground=false}vy-=16*dt;pl.y+=vy*dt;if(pl.y<1.68){pl.y=1.68;vy=0;ground=true}const target=new THREE.Vector3(pl.x,pl.y+.12,pl.z),alleyCam=isV6Alley(pl.x,pl.z),follow=alleyCam?2.45:5.0,off=new THREE.Vector3(-Math.sin(yaw)*follow,alleyCam?2.68:2.42,-Math.cos(yaw)*follow),desired=target.clone().add(off);if(alleyCam){desired.x+=.58}clampV6Camera(desired,target);camera.position.lerp(desired,1-Math.exp(-dt*8));camera.lookAt(target.clone().add(new THREE.Vector3(Math.sin(yaw)*11,Math.sin(pitch)*4.2,Math.cos(yaw)*11)));renderer.info.reset();if(composer)composer.render();else renderer.render(scene,camera);acc+=dt;frames++;if(acc>.5){document.getElementById('fps').textContent=Math.round(frames/acc)+' FPS';document.getElementById('calls').textContent=renderer.info.render.calls+' DRAWS';document.getElementById('tris').textContent=(renderer.info.render.triangles/1000).toFixed(1)+'K TRIANGLES';if(ready>=15)document.getElementById('mode').textContent=high?'HIGH / C2000开放港湾 / PMREM+SSAO+SMAA':'MOBILE / C2000开放港湾 / PMREM';acc=0;frames=0}requestAnimationFrame(loop)}
+let acc=0,frames=0,_dayPhase=0.45,_glitchT=0;function loop(){const dt=Math.min(clock.getDelta(),.05);WATER_MAT.uniforms.uTime.value=clock.elapsedTime;REFL_WATER_MAT.uniforms.uTime.value=clock.elapsedTime;if(WATER_REFL.on&&WATER_REFL.rt)WATER_REFL.update(camera);if(gradePass)gradePass.uniforms.uTime.value=clock.elapsedTime;if(HARBOR_LIFE)HARBOR_LIFE.update(clock.elapsedTime);if(C2000.root)C2000.update?.(clock.elapsedTime);
+// 缓慢昼夜循环 (1 个完整周期 = 4 分钟)
+_dayPhase=(_dayPhase+dt*0.004)%1;
+const dayK=Math.sin(_dayPhase*Math.PI*2)*0.5+0.5;
+if(scene.environment) scene.environmentIntensity=0.18+dayK*0.45;
+if(scene.fog){
+  const dayFog=scene.fog.color.clone().lerp(new THREE.Color(0x0a1822),1-dayK);
+  scene.fog.color.copy(dayFog);
+  scene.fog.density=0.0024+(1-dayK)*0.0015;
+}
+// 玻璃窗闪烁 (夜晚效果更明显): 每 ~3 秒随机一栋楼的窗光变化
+_glitchT+=dt;
+if(_glitchT>0.15){
+  _glitchT=0;
+  scene.traverse(o=>{
+    if(o.isMesh&&o.material&&o.material.name==='C2000_V2_Glass'){
+      const flick=0.85+Math.random()*0.3;
+      o.material.emissiveIntensity=flick*0.55;
+    }else if(o.isMesh&&o.material&&o.material.name==='C2000_V2_WindowRecess'){
+      o.material.emissiveIntensity=0.6+Math.random()*0.4;
+    }
+  });
+}const f=new THREE.Vector3(Math.sin(yaw),0,Math.cos(yaw)),r=new THREE.Vector3(f.z,0,-f.x);let dx=0,dz=0,keyMove=false;if(keys.KeyW){dx+=f.x;dz+=f.z;keyMove=true}if(keys.KeyS){dx-=f.x;dz-=f.z;keyMove=true}if(keys.KeyA){dx-=r.x;dz+=r.z;keyMove=true}if(keys.KeyD){dx+=r.x;dz-=r.z;keyMove=true}if(touch.mx||touch.my){dx+=-r.x*touch.mx-f.x*touch.my;dz+=-r.z*touch.mx-f.z*touch.my}const l=Math.hypot(dx,dz),analog=keyMove?1:Math.min(1,Math.hypot(touch.mx,touch.my)),spd=(keys.ShiftLeft||touch.sprint)?8.1:4.75;if(l&&analog){dx=dx/l*spd*dt*analog;dz=dz/l*spd*dt*analog;const nx=Math.max(corridor.minX,Math.min(corridor.maxX,pl.x+dx)),nz=Math.max(corridor.minZ,Math.min(corridor.maxZ,pl.z+dz));if(!collision(nx,nz)&&isV6Playable(nx,nz)){pl.x=nx;pl.z=nz}}const wantsJump=keys.Space||touch.jump;touch.jump=false;if(wantsJump&&ground){vy=6.2;ground=false}vy-=16*dt;pl.y+=vy*dt;if(pl.y<1.68){pl.y=1.68;vy=0;ground=true}const target=new THREE.Vector3(pl.x,pl.y+.12,pl.z),alleyCam=isV6Alley(pl.x,pl.z),follow=alleyCam?2.45:5.0,off=new THREE.Vector3(-Math.sin(yaw)*follow,alleyCam?2.68:2.42,-Math.cos(yaw)*follow),desired=target.clone().add(off);if(alleyCam){desired.x+=.58}clampV6Camera(desired,target);camera.position.lerp(desired,1-Math.exp(-dt*8));camera.lookAt(target.clone().add(new THREE.Vector3(Math.sin(yaw)*11,Math.sin(pitch)*4.2,Math.cos(yaw)*11)));renderer.info.reset();if(composer)composer.render();else renderer.render(scene,camera);acc+=dt;frames++;if(acc>.5){document.getElementById('fps').textContent=Math.round(frames/acc)+' FPS';document.getElementById('calls').textContent=renderer.info.render.calls+' DRAWS';document.getElementById('tris').textContent=(renderer.info.render.triangles/1000).toFixed(1)+'K TRIANGLES';if(ready>=15)document.getElementById('mode').textContent=high?'HIGH / C2000开放港湾 / PMREM+SSAO+SMAA':'MOBILE / C2000开放港湾 / PMREM';acc=0;frames=0}requestAnimationFrame(loop)}
 addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);if(gradePass)gradePass.uniforms.uAspect.value=innerWidth/Math.max(1,innerHeight);try{WATER_REFL.resize()}catch(e){}if(composer){composer.setSize(innerWidth,innerHeight);if(ssaoPass)ssaoPass.setSize(innerWidth,innerHeight);if(smaaPass)smaaPass.setSize(innerWidth*Math.min(devicePixelRatio,high?1.6:1),innerHeight*Math.min(devicePixelRatio,high?1.6:1))}});renderer.setSize(innerWidth,innerHeight);initQualityPipeline();try{WATER_REFL.init()}catch(e){console.warn('water refl init failed',e)}setQuality(true);addAssetScene().catch(err=>{console.error(err);document.getElementById('mode').textContent='GLB 加载失败';status('ERROR · 查看控制台')});
 /* 运行时自适应：帧率低于目标的连续采样后逐步下调渲染分辨率,高于则回升(滞后防抖) */
 let _adScale=1,_adC=0,_adOk=0,_adBad=0,_adTimer=0;
