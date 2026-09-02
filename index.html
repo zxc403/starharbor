@@ -30,9 +30,9 @@ const camera=new THREE.PerspectiveCamera(63,innerWidth/innerHeight,.1,240),clock
 const gltf=new GLTFLoader();gltf.setMeshoptDecoder(MeshoptDecoder);
 let composer=null,ssaoPass=null,smaaPass=null,bloomPass=null,gradePass=null;
 /* FINAL 电影调色:在 OutputPass(ACES+sRGB) 之后做 lift/gain 冷暖分离、饱和度、对比度、暗角与颗粒 */
-const GRADE_SHADER={uniforms:{tDiffuse:{value:null},uVig:{value:.32},uGrain:{value:.014},uSat:{value:1.08},uCon:{value:1.06},uLift:{value:new THREE.Vector3(.006,.012,.018)},uGain:{value:new THREE.Vector3(1.025,1.005,.962)},uShadows:{value:new THREE.Vector3(.96,.97,1.02)},uHighlights:{value:new THREE.Vector3(1.04,1.02,.95)},uTime:{value:0},uAspect:{value:innerWidth/Math.max(1,innerHeight)}},
+const GRADE_SHADER={uniforms:{tDiffuse:{value:null},uVig:{value:.34},uGrain:{value:.018},uSat:{value:1.12},uCon:{value:1.08},uLift:{value:new THREE.Vector3(.008,.014,.020)},uGain:{value:new THREE.Vector3(1.030,1.008,.958)},uShadows:{value:new THREE.Vector3(.94,.96,1.04)},uHighlights:{value:new THREE.Vector3(1.05,1.02,.92)},uTime:{value:0},uAspect:{value:innerWidth/Math.max(1,innerHeight)},uSunScreen:{value:new THREE.Vector2(.72,.3)},uGodRays:{value:1.0}},
 vertexShader:'varying vec2 vUv;void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',
-fragmentShader:['uniform sampler2D tDiffuse;uniform float uVig,uGrain,uSat,uCon,uTime,uAspect;uniform vec3 uLift,uGain,uShadows,uHighlights;varying vec2 vUv;',
+fragmentShader:['uniform sampler2D tDiffuse;uniform float uVig,uGrain,uSat,uCon,uTime,uAspect,uGodRays;uniform vec3 uLift,uGain,uShadows,uHighlights;uniform vec2 uSunScreen;varying vec2 vUv;',
 'float ghash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}',
 'void main(){',
 '  vec3 c=texture2D(tDiffuse,vUv).rgb;',
@@ -44,11 +44,16 @@ fragmentShader:['uniform sampler2D tDiffuse;uniform float uVig,uGrain,uSat,uCon,
 '  c=c*uGain+uLift;',
 '  c=mix(vec3(lum),c,uSat);',
 '  c=(c-.5)*uCon+.5;',
+'  // 体积光(丁达尔) - 屏幕空间 god rays 简化版',
+'  vec2 sd=vUv-uSunScreen;float dist=length(sd);float god=pow(max(0.,1.0-dist*1.8),3.0);',
+'  // 模拟阳光斜射, 中心最亮, 边缘渐弱',
+'  c+=vec3(1.0,0.92,0.78)*god*0.18*uGodRays;',
 '  // 暗角',
 '  vec2 d=vUv-.5;d.x*=uAspect;',
-'  c*=1.-uVig*smoothstep(.10,.92,dot(d,d)*2.4);',
-'  // 颗粒 (time-based)',
-'  c+=(ghash(vUv*vec2(1613.,919.)+fract(uTime)*7.13)-.5)*uGrain;',
+'  c*=1.-uVig*smoothstep(.08,.95,dot(d,d)*2.4);',
+'  // 颗粒 (胶片感 + 暗角颗粒混合)',
+'  float gnoise=ghash(vUv*vec2(1613.,919.)+fract(uTime)*7.13);',
+'  c+=(gnoise-.5)*uGrain*(0.7+0.6*(1.0-dist));',  // 中心颗粒弱, 暗角颗粒强
 '  gl_FragColor=vec4(clamp(c,0.,1.),1.);}'].join('\n')};
 /* ===== P1-A: 真实 HDR 加载(优先) + 程序化 fallback ===== */
 let SKY_ENV=null;
@@ -73,21 +78,35 @@ async function loadRealHDR(){
 }
 const PROC_SKY_ENV=(()=>{
   const W=64,H=32,data=new Float32Array(W*H*4);
-  const zen=new THREE.Color(0x86b7c4),hor=new THREE.Color(0xdde9ea),gnd=new THREE.Color(0x4e5d5c);
+  // 日式蓝白渐变 + 体积云
+  const zen=new THREE.Color(0x6aacd8),hor=new THREE.Color(0xe8f0f5),gnd=new THREE.Color(0x4a5a64);
   const sun=new THREE.Vector3(-38,58,22).normalize();
   for(let y=0;y<H;y++){
-    const el=(-Math.PI/2)+(y/(H-1))*Math.PI;           // y=0 底(-90°) → y=H-1 顶(+90°)
+    const el=(-Math.PI/2)+(y/(H-1))*Math.PI;
     const dy=Math.sin(el);
     for(let x=0;x<W;x++){
-      const az=(x/W)*Math.PI*2+2.2;                    // 方位偏移对齐太阳
+      const az=(x/W)*Math.PI*2+2.2;
       const c=new THREE.Color();
-      if(dy>=0)c.copy(hor).lerp(zen,Math.pow(Math.min(1,dy/.9),.65));
+      if(dy>=0)c.copy(hor).lerp(zen,Math.pow(Math.min(1,dy/.9),.55));  // 渐变更柔和
       else c.copy(hor).lerp(gnd,Math.min(1,-dy*2.5));
+      // 体积云: 在天顶 -30° 范围加 noise
+      if(dy>0.15&&dy<0.7){
+        const cx=Math.cos(az),cy=Math.sin(az);
+        // 简单 fbm 噪声
+        let n=0,a=1,f=1.5;
+        for(let o=0;o<5;o++){
+          n+=Math.sin((cx*f+az*.3)*4+cy*f*3)*a;
+          a*=.55;f*=2.1;
+        }
+        n=(n+1)*.5;
+        const cloud=Math.max(0,Math.min(1,(n-.5)*1.4));
+        c.lerp(new THREE.Color(0xffffff),cloud*.35);  // 白色云朵
+      }
       const dx=Math.cos(el)*Math.cos(az),dz=Math.cos(el)*Math.sin(az);
       let ang=dx*sun.x+dy*sun.y+dz*sun.z;ang=Math.acos(Math.max(-1,Math.min(1,ang)));
-      let add=.55*Math.exp(-ang/.30);
-      if(ang<.05)add+=20*(1-ang/.05);
-      data[(y*W+x)*4]=c.r+add;data[(y*W+x)*4+1]=c.g+add*.97;data[(y*W+x)*4+2]=c.b+add*.92;data[(y*W+x)*4+3]=1;
+      let add=.65*Math.exp(-ang/.28);  // 太阳更亮
+      if(ang<.05)add+=24*(1-ang/.05);
+      data[(y*W+x)*4]=c.r+add;data[(y*W+x)*4+1]=c.g+add*.96;data[(y*W+x)*4+2]=c.b+add*.90;data[(y*W+x)*4+3]=1;
     }
   }
   const t=new THREE.DataTexture(data,W,H,THREE.RGBAFormat,THREE.FloatType);
@@ -329,7 +348,7 @@ function tex(uri,rx,ry,color=true){const t=texLoader.load(uri);t.wrapS=t.wrapT=T
 const roadTex={map:tex(AS.asphaltD,2.6,9.0),normalMap:tex(AS.asphaltN,2.6,9.0,false),roughnessMap:tex(AS.asphaltR,2.6,9.0,false)};
 const paveTex={map:tex(AS.paveD,2.3,7.2),normalMap:tex(AS.paveN,2.3,7.2,false),roughnessMap:tex(AS.paveR,2.3,7.2,false)};
 const brickTex={map:tex(AS.brickD,2.5,3.8),normalMap:tex(AS.brickN,2.5,3.8,false),roughnessMap:tex(AS.brickR,2.5,3.8,false)};
-const M={road:new THREE.MeshStandardMaterial({map:roadTex.map,normalMap:roadTex.normalMap,roughnessMap:roadTex.roughnessMap,roughness:.72,metalness:.03,normalScale:new THREE.Vector2(.86,.86)}),pave:new THREE.MeshStandardMaterial({map:paveTex.map,normalMap:paveTex.normalMap,roughnessMap:paveTex.roughnessMap,roughness:.72,metalness:.02,normalScale:new THREE.Vector2(.70,.70)}),concrete:new THREE.MeshStandardMaterial({color:0x7c8580,roughness:.83}),metal:new THREE.MeshStandardMaterial({color:0x25363b,roughness:.28,metalness:.9}),water:null,mark:new THREE.MeshBasicMaterial({color:0xe8d8a5}),warm:new THREE.MeshStandardMaterial({color:0xf1bb6c,emissive:0xd77627,emissiveIntensity:.7,roughness:.4})};
+const M={road:new THREE.MeshStandardMaterial({map:roadTex.map,normalMap:roadTex.normalMap,roughnessMap:roadTex.roughnessMap,roughness:.38,metalness:.18,envMapIntensity:1.2,normalScale:new THREE.Vector2(.86,.86)}),pave:new THREE.MeshStandardMaterial({map:paveTex.map,normalMap:paveTex.normalMap,roughnessMap:paveTex.roughnessMap,roughness:.55,metalness:.10,envMapIntensity:0.9,normalScale:new THREE.Vector2(.70,.70)}),concrete:new THREE.MeshStandardMaterial({color:0x7c8580,roughness:.83}),metal:new THREE.MeshStandardMaterial({color:0x25363b,roughness:.28,metalness:.9}),water:null,mark:new THREE.MeshBasicMaterial({color:0xe8d8a5}),warm:new THREE.MeshStandardMaterial({color:0xf1bb6c,emissive:0xd77627,emissiveIntensity:.7,roughness:.4})};
 // ===== 动态水面:程序化法线 + 菲涅尔天空反射 + 太阳高光(高/移动双档) =====
 const WATER_MAT=(()=>{
   const u={
@@ -657,7 +676,7 @@ function buildC2000ReworkDistrict(){
   const hemi=scene.children.find(o=>o.isHemisphereLight);if(hemi){hemi.color.set(0xd7edf2);hemi.groundColor.set(0x687063);hemi.intensity=1.54;}
   if(C2000.sky){C2000.sky.material.uniforms.uSun.value.copy(new THREE.Vector3(28,45,130).normalize());}
   const disc=c2000SunSprite();root.add(disc);C2000.sunDisc=disc;
-  const asphaltTex=c2000EmbeddedPBR('asphalt',10.8,1.25);const asphalt=new THREE.MeshStandardMaterial({map:asphaltTex.map,normalMap:asphaltTex.normalMap,normalScale:new THREE.Vector2(.42,.42),color:0x67645e,roughness:.84,metalness:.01});
+  const asphaltTex=c2000EmbeddedPBR('asphalt',10.8,1.25);const asphalt=new THREE.MeshStandardMaterial({map:asphaltTex.map,normalMap:asphaltTex.normalMap,normalScale:new THREE.Vector2(.42,.42),color:0x67645e,roughness:.45,metalness:.15,envMapIntensity:1.1});
   const concreteTex=c2000EmbeddedPBR('concrete',8.4,1.65);const concrete=new THREE.MeshStandardMaterial({map:concreteTex.map,normalMap:concreteTex.normalMap,normalScale:new THREE.Vector2(.48,.48),color:0xb2aa9d,roughness:.79,metalness:.02});
   const curbMat=new THREE.MeshStandardMaterial({color:0xc0b8aa,roughness:.65,metalness:.03});const steel=new THREE.MeshStandardMaterial({color:0x273033,roughness:.36,metalness:.78});
   // A complete cross section: drive lane, parking ribbon, granite curb, rain strip, walking zone and a building threshold.
