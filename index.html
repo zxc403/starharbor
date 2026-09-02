@@ -482,7 +482,45 @@ function buildHarborLife(parent){
       const fl=Math.sin(t*S.fq+S.ph*3)*amp;
       S.wl.rotation.z=fl;S.wr.rotation.z=-fl;
     }
-  }};
+    // 行人漫步
+    for(let i=0;i<peds.length;i++){const P=peds[i];if(!P.g.visible)continue;P.g.position.x=P.cx+Math.sin(t*P.w+P.ph)*P.r;P.g.position.z=P.cz+Math.cos(t*P.w+P.ph)*P.r;P.g.rotation.y=Math.atan2(Math.cos(t*P.w+P.ph),-Math.sin(t*P.w+P.ph));P.legL.rotation.x=Math.sin(t*5+P.ph)*.5;P.legR.rotation.x=-Math.sin(t*5+P.ph)*.5;P.armL.rotation.x=-Math.sin(t*5+P.ph)*.3;P.armR.rotation.x=Math.sin(t*5+P.ph)*.3;}
+  },
+  setPedsVisible(v){for(const P of peds)P.g.visible=v;}
+};
+// 程序化行人(日本街景)
+const peds=[];
+const pedColors=[0x3a4a5a,0x6a4a3a,0x4a3a5a,0x5a5a3a,0x3a3a3a,0x5a3a3a,0x3a5a3a,0x4a3a4a];
+{
+  for(let i=0;i<14;i++){
+    const g=new THREE.Group();
+    const palette=pedColors[i%pedColors.length];
+    const skin=0xe8b89a;
+    // 头
+    const head=new THREE.Mesh(new THREE.SphereGeometry(.16,10,8),new THREE.MeshStandardMaterial({color:skin,roughness:.85}));
+    head.position.y=1.55;g.add(head);
+    // 头发
+    const hair=new THREE.Mesh(new THREE.SphereGeometry(.17,10,6,0,Math.PI*2,0,Math.PI*.55),new THREE.MeshStandardMaterial({color:i%3===0?0x1a1a1a:0x3a2a1a,roughness:.9}));
+    hair.position.y=1.6;g.add(hair);
+    // 身体
+    const torso=new THREE.Mesh(new THREE.BoxGeometry(.36,.65,.22),new THREE.MeshStandardMaterial({color:palette,roughness:.85}));
+    torso.position.y=1.0;g.add(torso);
+    // 腿 (可动)
+    const legL=new THREE.Mesh(new THREE.BoxGeometry(.13,.7,.14),new THREE.MeshStandardMaterial({color:0x1a2a3a,roughness:.9}));
+    legL.position.set(-.09,0.35,0);g.add(legL);
+    const legR=new THREE.Mesh(new THREE.BoxGeometry(.13,.7,.14),new THREE.MeshStandardMaterial({color:0x1a2a3a,roughness:.9}));
+    legR.position.set(.09,0.35,0);g.add(legR);
+    // 手臂
+    const armL=new THREE.Mesh(new THREE.BoxGeometry(.1,.55,.1),new THREE.MeshStandardMaterial({color:palette,roughness:.9}));
+    armL.position.set(-.25,1.0,0);g.add(armL);
+    const armR=new THREE.Mesh(new THREE.BoxGeometry(.1,.55,.1),new THREE.MeshStandardMaterial({color:palette,roughness:.9}));
+    armR.position.set(.25,1.0,0);g.add(armR);
+    g.traverse(o=>{if(o.isMesh){o.castShadow=true;o.receiveShadow=true;}});
+    scene.add(g);
+    // 沿主街分布
+    const cx=(i%7-3)*8;
+    const cz=-8+Math.floor(i/7)*6;
+    peds.push({g,cx,cz,r:1.5+Math.random()*2,w:0.15+Math.random()*0.15,ph:i*1.3,legL,legR,armL,armR});
+  }
 }
 function box(w,h,d,mat,x,y,z,bevel=0){const g=new THREE.BoxGeometry(w,h,d);if(bevel){}const o=new THREE.Mesh(g,mat);o.position.set(x,y,z);o.castShadow=true;o.receiveShadow=true;scene.add(o);return o}
 function plane(w,h,mat,x,y,z){const o=new THREE.Mesh(new THREE.PlaneGeometry(w,h),mat);o.rotation.x=-Math.PI/2;o.position.set(x,y,z);o.receiveShadow=true;scene.add(o);return o}
@@ -581,6 +619,26 @@ function buildV6AlleyShell(){
 
 
 function v7CanvasLabel(top,bottom,bg,fg){const c=document.createElement('canvas');c.width=256;c.height=128;const x=c.getContext('2d');x.fillStyle=bg;x.fillRect(0,0,256,128);x.fillStyle='rgba(255,255,255,.10)';x.fillRect(10,10,236,5);x.fillStyle=fg;x.textAlign='center';x.font='bold 34px sans-serif';x.fillText(top,128,57);x.font='bold 18px sans-serif';x.fillText(bottom,128,91);x.fillStyle='#e8a95a';x.fillRect(32,104,192,4);const t=new THREE.CanvasTexture(c);t.colorSpace=THREE.SRGBColorSpace;t.anisotropy=4;return t}
+
+// 日文招牌 (新海诚风格 - 木牌 + 日文)
+function jpSignCanvas(kanji,kana,sub,bg,fg){
+  const c=document.createElement('canvas');c.width=320;c.height=160;const x=c.getContext('2d');
+  // 木牌底色 + 渐变
+  const grad=x.createLinearGradient(0,0,0,160);
+  grad.addColorStop(0,bg);
+  grad.addColorStop(1,'rgba(0,0,0,0.3)');
+  x.fillStyle=grad;x.fillRect(0,0,320,160);
+  // 木纹
+  x.strokeStyle='rgba(0,0,0,.15)';x.lineWidth=1;
+  for(let i=0;i<8;i++){x.beginPath();x.moveTo(0,i*20+10);x.lineTo(320,i*20+10);x.stroke();}
+  // 边框
+  x.strokeStyle=fg;x.lineWidth=3;x.strokeRect(8,8,304,144);
+  x.fillStyle=fg;x.textAlign='center';
+  x.font='bold 56px serif';x.fillText(kanji,160,80);
+  if(kana){x.font='24px sans-serif';x.globalAlpha=.8;x.fillText(kana,160,115);x.globalAlpha=1;}
+  if(sub){x.font='16px sans-serif';x.globalAlpha=.6;x.fillText(sub,160,140);}
+  const t=new THREE.CanvasTexture(c);t.colorSpace=THREE.SRGBColorSpace;t.anisotropy=4;return t;
+}
 function buildV7StreetLife(parent,facades){
   const G=new THREE.Group();G.name='V7_InstancedStreetLife';parent.add(G);if(!facades?.length)return G;
   const dummy=new THREE.Object3D(),ray=new THREE.Raycaster();ray.far=14;const wallX=(z,y)=>{ray.set(new THREE.Vector3(-3,y,z),new THREE.Vector3(-1,0,0));const h=ray.intersectObjects(facades,true);return h.length?h[0].point.x:null};
@@ -614,11 +672,36 @@ function c2000Playable(x,z){/* Until adjacent cells are built, keep touch moveme
    is made coherent before the city grows. All textures below are original Canvas
    material studies; no image, model, code or texture from the user-uploaded
    reference ZIP/Blend files is used. */
+// 真实 4K PBR 资源(github raw + jsDelivr)
+const REAL_PBR_URLS = {
+  weathered: {
+    diff: 'https://cdn.jsdelivr.net/gh/zxc403/starharbor@main/assets/textures/weathered/diff.png',
+    normal: 'https://cdn.jsdelivr.net/gh/zxc403/starharbor@main/assets/textures/weathered/nor_gl.png',
+    rough: 'https://cdn.jsdelivr.net/gh/zxc403/starharbor@main/assets/textures/weathered/rough.png'
+  }
+};
 function c2000EmbeddedPBR(key, repeatX, repeatY){
   C2000.pbrCache=C2000.pbrCache||{};const id=key+'_'+repeatX+'_'+repeatY;if(C2000.pbrCache[id])return C2000.pbrCache[id];
-  const d=C2000_CC0_PBR_DATA[key],loader=new THREE.TextureLoader();const map=loader.load(d.diffuse),normalMap=loader.load(d.normal);
-  for(const t of [map,normalMap]){t.wrapS=t.wrapT=THREE.RepeatWrapping;t.repeat.set(repeatX,repeatY);t.anisotropy=Math.min(8,renderer.capabilities.getMaxAnisotropy());}
-  map.colorSpace=THREE.SRGBColorSpace;normalMap.colorSpace=THREE.NoColorSpace;return C2000.pbrCache[id]={map,normalMap};
+  const loader=new THREE.TextureLoader();
+  let map, normalMap, roughMap;
+  if(REAL_PBR_URLS[key]){
+    // 用真实 4K 贴图
+    const urls = REAL_PBR_URLS[key];
+    map = loader.load(urls.diff);
+    normalMap = loader.load(urls.normal);
+    if(urls.rough) roughMap = loader.load(urls.rough);
+  } else {
+    const d = C2000_CC0_PBR_DATA[key];
+    if(!d){ console.warn('no PBR for', key); return null; }
+    map = loader.load(d.diffuse);
+    normalMap = loader.load(d.normal);
+  }
+  for(const t of [map, normalMap, roughMap].filter(Boolean)){
+    t.wrapS=t.wrapT=THREE.RepeatWrapping;t.repeat.set(repeatX,repeatY);t.anisotropy=Math.min(8,renderer.capabilities.getMaxAnisotropy());
+  }
+  map.colorSpace=THREE.SRGBColorSpace;normalMap.colorSpace=THREE.NoColorSpace;
+  if(roughMap) roughMap.colorSpace=THREE.NoColorSpace;
+  return C2000.pbrCache[id]={map, normalMap, roughMap};
 }
 
 function c2000MasonryTexture(seed, warm=false){
@@ -664,6 +747,39 @@ function c2000CreateReworkFacade(parent,cx,cz,w,levels,side,seed){
   const shopW=w*.42,shopX=cx-w*.23;c2000Box(B,shopW,3.05,.20,inside,shopX,1.78,face-dir*.10,'C2000_V2_ShopRecess',false);c2000Box(B,shopW+.34,3.35,.10,charcoal,shopX,1.85,face,'C2000_V2_ShopFrame',false);c2000Box(B,shopW-.18,2.83,.07,glass,shopX,1.82,face+dir*.075,'C2000_V2_ShopGlass',false);for(const sx of [-.20,0,.20])c2000Box(B,.10,2.92,.12,charcoal,shopX+shopW*sx,1.82,face+dir*.13,'C2000_V2_ShopMullion',false);c2000Box(B,shopW-.12,.11,.14,charcoal,shopX,.48,face+dir*.13,'C2000_V2_ShopKickplate',false);c2000Box(B,1.08,2.62,.13,stone,shopX+shopW*.26,1.58,face+dir*.14,'C2000_V2_ShopDoorFrame',false);
   c2000Box(B,w*.50,.20,1.18,charcoal,cx-w*.23,3.60,face+dir*.42,'C2000_V2_Canopy',true);c2000Box(B,w*.50,.10,1.00,stone,cx+w*.25,3.25,face+dir*.36,'C2000_V2_EntryLintel',false);
   // Roof equipment is intentionally omitted at this distance: isolated dark boxes weakened the continuous harbor roofline instead of adding readable scale.
+  // 日文招牌 (新海诚风格)
+  const JP_SIGNS = [
+    {kanji:'小铺',kana:'しょうてん',sub:'SHOP', bg:'#5a3a1a',fg:'#f5e6c8'},
+    {kanji:'居酒屋',kana:'いざかや',sub:'IZAKAYA', bg:'#2d3a1f',fg:'#e8d5a0'},
+    {kanji:'自転車',kana:'じてんしゃ',sub:'BIKE', bg:'#3a4a3a',fg:'#c8e0a0'},
+    {kanji:'八戸屋',kana:'はちのへや',sub:'STORE', bg:'#1a3a5a',fg:'#e0e8f5'},
+    {kanji:'喫茶店',kana:'きっさてん',sub:'CAFE', bg:'#3a2a1a',fg:'#f5d8a0'},
+    {kanji:'ドラック',kana:'ドラッグ',sub:'DRUG', bg:'#5a1a3a',fg:'#f5c0d8'},
+    {kanji:'ラメン',kana:'らーめん',sub:'RAMEN', bg:'#4a3a1a',fg:'#f5e0a0'},
+    {kanji:'コンビニ',kana:'こんびに',sub:'CVS', bg:'#1a3a2a',fg:'#c0f0d8'}
+  ];
+  if(seed%2===0){
+    const signData=JP_SIGNS[seed%JP_SIGNS.length];
+    const signTex=jpSignCanvas(signData.kanji,signData.kana,signData.sub,signData.bg,signData.fg);
+    const signMat=new THREE.MeshStandardMaterial({map:signTex,emissiveMap:signTex,emissive:0xffffff,emissiveIntensity:0.42,roughness:0.7,side:THREE.DoubleSide});
+    const signW=Math.min(1.4,w*.55),signH=signW*.5;
+    const signGeo=new THREE.PlaneGeometry(signW,signH);
+    const sign=new THREE.Mesh(signGeo,signMat);
+    sign.position.set(cx-w*.18+((seed*7)%5)*.4, h*.55, face+dir*.72);
+    sign.rotation.y=dir<0?0:Math.PI;
+    sign.castShadow=true;
+    B.add(sign);
+    // 垂直招牌 (右边)
+    if(seed%3===0){
+      const vSignData=JP_SIGNS[(seed+3)%JP_SIGNS.length];
+      const vTex=jpSignCanvas(vSignData.kanji,'',vSignData.sub,vSignData.bg,vSignData.fg);
+      const vMat=new THREE.MeshStandardMaterial({map:vTex,emissiveMap:vTex,emissive:0xffffff,emissiveIntensity:0.35,roughness:0.75,side:THREE.DoubleSide});
+      const vSign=new THREE.Mesh(new THREE.PlaneGeometry(0.5,1.6),vMat);
+      vSign.position.set(cx+w*.42, h*.45, face+dir*.65);
+      vSign.rotation.y=dir<0?0:Math.PI;
+      B.add(vSign);
+    }
+  }
   C2000.cameraBlockers.push(B);return B;
 }
 function buildC2000ReworkDistrict(){
@@ -677,7 +793,7 @@ function buildC2000ReworkDistrict(){
   if(C2000.sky){C2000.sky.material.uniforms.uSun.value.copy(new THREE.Vector3(28,45,130).normalize());}
   const disc=c2000SunSprite();root.add(disc);C2000.sunDisc=disc;
   const asphaltTex=c2000EmbeddedPBR('asphalt',10.8,1.25);const asphalt=new THREE.MeshStandardMaterial({map:asphaltTex.map,normalMap:asphaltTex.normalMap,normalScale:new THREE.Vector2(.42,.42),color:0x67645e,roughness:.45,metalness:.15,envMapIntensity:1.1});
-  const concreteTex=c2000EmbeddedPBR('concrete',8.4,1.65);const concrete=new THREE.MeshStandardMaterial({map:concreteTex.map,normalMap:concreteTex.normalMap,normalScale:new THREE.Vector2(.48,.48),color:0xb2aa9d,roughness:.79,metalness:.02});
+  const concreteTex=c2000EmbeddedPBR('weathered',8.4,1.65);const concrete=new THREE.MeshStandardMaterial({map:concreteTex.map,normalMap:concreteTex.normalMap,roughnessMap:concreteTex.roughMap||null,normalScale:new THREE.Vector2(.48,.48),color:0xb2aa9d,roughness:.79,metalness:.02,envMapIntensity:0.8});
   const curbMat=new THREE.MeshStandardMaterial({color:0xc0b8aa,roughness:.65,metalness:.03});const steel=new THREE.MeshStandardMaterial({color:0x273033,roughness:.36,metalness:.78});
   // A complete cross section: drive lane, parking ribbon, granite curb, rain strip, walking zone and a building threshold.
   c2000Box(root,67,.09,7.10,asphalt,42,.17,21,'C2000_V2_DriveLane',false);
