@@ -307,10 +307,16 @@ function initQualityPipeline(){
     ssaoPass.kernelRadius=1.2;ssaoPass.minDistance=.003;ssaoPass.maxDistance=.12;
     composer.addPass(ssaoPass);
     bloomPass=new UnrealBloomPass(new THREE.Vector2(innerWidth,innerHeight),.55,.7,.95);
-    bloomPass.threshold=.85;  // 让窗光/招牌更明显发光
+    bloomPass.threshold=.85;
     composer.addPass(bloomPass);
     smaaPass=new SMAAPass(innerWidth*Math.min(devicePixelRatio,1.6),innerHeight*Math.min(devicePixelRatio,1.6));
     composer.addPass(smaaPass);
+    // 锐化 pass (DLSS-like 边缘增强, 让低分辨率看起来更清晰)
+    sharpenPass=new ShaderPass(SHARPEN_SHADER);
+    sharpenPass.uniforms.uWidth.value=innerWidth;
+    sharpenPass.uniforms.uHeight.value=innerHeight;
+    sharpenPass.uniforms.uAmount.value=CAP.tier==='ultra'?0.32:CAP.tier==='high'?0.25:0.18;
+    composer.addPass(sharpenPass);
     composer.addPass(new OutputPass());
     gradePass=new ShaderPass(GRADE_SHADER);
     composer.addPass(gradePass);
@@ -990,7 +996,22 @@ if(_glitchT>0.15){
 }const f=new THREE.Vector3(Math.sin(yaw),0,Math.cos(yaw)),r=new THREE.Vector3(f.z,0,-f.x);let dx=0,dz=0,keyMove=false;if(keys.KeyW){dx+=f.x;dz+=f.z;keyMove=true}if(keys.KeyS){dx-=f.x;dz-=f.z;keyMove=true}if(keys.KeyA){dx-=r.x;dz+=r.z;keyMove=true}if(keys.KeyD){dx+=r.x;dz-=r.z;keyMove=true}if(touch.mx||touch.my){dx+=-r.x*touch.mx-f.x*touch.my;dz+=-r.z*touch.mx-f.z*touch.my}const l=Math.hypot(dx,dz),analog=keyMove?1:Math.min(1,Math.hypot(touch.mx,touch.my)),spd=(keys.ShiftLeft||touch.sprint)?8.1:4.75;if(l&&analog){dx=dx/l*spd*dt*analog;dz=dz/l*spd*dt*analog;const nx=Math.max(corridor.minX,Math.min(corridor.maxX,pl.x+dx)),nz=Math.max(corridor.minZ,Math.min(corridor.maxZ,pl.z+dz));if(!collision(nx,nz)&&isV6Playable(nx,nz)){pl.x=nx;pl.z=nz}}const wantsJump=keys.Space||touch.jump;touch.jump=false;if(wantsJump&&ground){vy=6.2;ground=false}vy-=16*dt;pl.y+=vy*dt;if(pl.y<1.68){pl.y=1.68;vy=0;ground=true}const target=new THREE.Vector3(pl.x,pl.y+.12,pl.z),alleyCam=isV6Alley(pl.x,pl.z),follow=alleyCam?2.45:5.0,off=new THREE.Vector3(-Math.sin(yaw)*follow,alleyCam?2.68:2.42,-Math.cos(yaw)*follow),desired=target.clone().add(off);if(alleyCam){desired.x+=.58}clampV6Camera(desired,target);camera.position.lerp(desired,1-Math.exp(-dt*8));camera.lookAt(target.clone().add(new THREE.Vector3(Math.sin(yaw)*11,Math.sin(pitch)*4.2,Math.cos(yaw)*11)));renderer.info.reset();if(composer)composer.render();else renderer.render(scene,camera);acc+=dt;frames++;if(acc>.5){document.getElementById('fps').textContent=Math.round(frames/acc)+' FPS';document.getElementById('calls').textContent=renderer.info.render.calls+' DRAWS';document.getElementById('tris').textContent=(renderer.info.render.triangles/1000).toFixed(1)+'K TRIANGLES';if(ready>=15)document.getElementById('mode').textContent=high?'HIGH / C2000开放港湾 / PMREM+SSAO+SMAA':'MOBILE / C2000开放港湾 / PMREM';acc=0;frames=0}requestAnimationFrame(loop)}
 addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);if(gradePass)gradePass.uniforms.uAspect.value=innerWidth/Math.max(1,innerHeight);try{WATER_REFL.resize()}catch(e){}if(composer){composer.setSize(innerWidth,innerHeight);if(ssaoPass)ssaoPass.setSize(innerWidth,innerHeight);if(smaaPass)smaaPass.setSize(innerWidth*Math.min(devicePixelRatio,high?1.6:1),innerHeight*Math.min(devicePixelRatio,high?1.6:1))}});renderer.setSize(innerWidth,innerHeight);initQualityPipeline();try{WATER_REFL.init()}catch(e){console.warn('water refl init failed',e)}setQuality(true);addAssetScene().catch(err=>{console.error(err);document.getElementById('mode').textContent='GLB 加载失败';status('ERROR · 查看控制台')});
 /* 运行时自适应：帧率低于目标的连续采样后逐步下调渲染分辨率,高于则回升(滞后防抖) */
-let _adScale=1,_adC=0,_adOk=0,_adBad=0,_adTimer=0;
+// 锐化后处理 (DLSS-like 增强)
+const SHARPEN_SHADER={uniforms:{tDiffuse:{value:null},uAmount:{value:0.25},uWidth:{value:innerWidth},uHeight:{value:innerHeight}},
+  vertexShader:'varying vec2 vUv;void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',
+  fragmentShader:['uniform sampler2D tDiffuse;uniform float uAmount;varying vec2 vUv;',
+    'void main(){vec3 c=texture2D(tDiffuse,vUv).rgb;',
+    '  vec2 px=vec2(1.0/uWidth,1.0/uHeight);',
+    '  // 3x3 锐化核 (unsharp mask)',
+    '  vec3 n=texture2D(tDiffuse,vUv+vec2(0.0,-px.y)).rgb;',
+    '  vec3 s=texture2D(tDiffuse,vUv+vec2(0.0, px.y)).rgb;',
+    '  vec3 e=texture2D(tDiffuse,vUv+vec2( px.x,0.0)).rgb;',
+    '  vec3 w=texture2D(tDiffuse,vUv+vec2(-px.x,0.0)).rgb;',
+    '  vec3 sharp=c+uAmount*0.25*(4.0*c-n-s-e-w);',
+    '  gl_FragColor=vec4(clamp(sharp,0.0,1.0),1.0);}'].join('\n')};
+let sharpenPass=null;
+
+
 function adaptiveTick(){_adTimer+=1;if(_adTimer<200)return;_adTimer=0;
   const fps=+document.getElementById('fps').textContent;if(!Number.isFinite(fps)||fps<=0)return;
   const target=CAP.arch==='intel'?45:55;
