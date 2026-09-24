@@ -371,17 +371,21 @@ const CAP={
   console.log('[CAP]',CAP.arch,'score~'+Math.round(score),'tier='+CAP.tier,'dpr='+CAP.dpr.toFixed(2),'cores='+CAP.cores);
 })();
 function from64(src){const s=atob(src),v=new Uint8Array(s.length);for(let i=0;i<s.length;i++)v[i]=s.charCodeAt(i);return v.buffer}
-async function parseGLB(src){
+function parseGLB(src){
+  // 统一用 gltf.load(url) - 最可靠的跨浏览器方案
   if(typeof src === 'string' && (src.startsWith('http') || src.startsWith('//'))){
     const url = src.startsWith('//') ? 'https:' + src : src;
-    // fetch → ArrayBuffer → gltf.parseAsync (最干净的方案)
-    const res = await fetch(url);
-    if(!res.ok) throw new Error(`HTTP ${res.status} loading ${url}`);
-    const buf = await res.arrayBuffer();
-    return gltf.parseAsync(buf, '');
+    return new Promise((resolve, reject) => {
+      gltf.load(url, resolve, undefined, reject);
+    });
   }
-  // base64 模式
-  return gltf.parseAsync(from64(src), '');
+  // base64 模式: 转 blob URL
+  const buf = from64(src);
+  const blob = new Blob([buf], {type:'model/gltf-binary'});
+  const blobURL = URL.createObjectURL(blob);
+  return new Promise((resolve, reject) => {
+    gltf.load(blobURL, g => { URL.revokeObjectURL(blobURL); resolve(g); }, undefined, err => { URL.revokeObjectURL(blobURL); reject(err); });
+  });
 }
 function status(label){document.getElementById('ready').textContent=label}
 function tex(uri,rx,ry,color=true){const t=texLoader.load(uri);t.wrapS=t.wrapT=THREE.RepeatWrapping;t.repeat.set(rx,ry);t.colorSpace=color?THREE.SRGBColorSpace:THREE.NoColorSpace;return t}
@@ -941,18 +945,18 @@ async function addAssetScene(){
   const bar=document.getElementById('loading-bar');
   const msg=document.getElementById('loading-msg');
   for(let i=0;i<GLB_KEYS.length;i++){
+    msg.textContent=`加载模型 ${i+1} / ${TOTAL} (${GLB_KEYS[i]})...`;
     try{
       const r=await parseGLB(AS[GLB_KEYS[i]]);
       results.push(r);
       const pct=Math.round(((i+1)/TOTAL)*100);
       bar.style.width=pct+'%';
-      msg.textContent=`加载模型 ${i+1} / ${TOTAL}...`;
       status(`${i+1} / ${TOTAL} ASSETS`);
     }catch(e){
       console.warn('GLB加载失败:',GLB_KEYS[i],e);
       results.push(null);
       bar.style.background='#ff6b6b';
-      msg.textContent=`⚠ ${GLB_KEYS[i]} 加载失败: ${e.message || e}，继续...`;
+      msg.textContent=`⚠ ${GLB_KEYS[i]} 加载失败,继续...`;
     }
   }
   const [fa,fb,fc,ft,fg,kit,sd,vn,th,si,sj,ss,sk,sr,sa]=results;
