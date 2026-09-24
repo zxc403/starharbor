@@ -372,7 +372,6 @@ const CAP={
 })();
 function from64(src){const s=atob(src),v=new Uint8Array(s.length);for(let i=0;i<s.length;i++)v[i]=s.charCodeAt(i);return v.buffer}
 async function parseGLB(src){
-  await MeshoptDecoder.ready;
   if(typeof src === 'string' && (src.startsWith('http') || src.startsWith('//'))){
     const url = src.startsWith('//') ? 'https:' + src : src;
     // fetch → ArrayBuffer → gltf.parseAsync (最干净的方案)
